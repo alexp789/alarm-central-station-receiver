@@ -20,6 +20,7 @@ import logging
 import sys
 import signal
 import socket
+import time
 
 from os import geteuid
 from select import select
@@ -234,6 +235,10 @@ def main():
                         action='store_true',
                         default=False,
                         help='Send a test notification, and exit.')
+    parser.add_argument('--warm-tigerjet',
+                        action='store_true',
+                        default=False,
+                        help='Play 10 second handshake on startup.')
     args = parser.parse_args()
 
     check_running_root()
@@ -246,6 +251,11 @@ def main():
         notification_test_exit(args.config_path)
 
     initialize(args.config_path)
+
+    if args.warm_tigerjet:
+        logging.info("Playing test file to warm up tigerjet")
+        with handshake.Handshake():
+            time.sleep(10)
 
     context = daemon.DaemonContext(
         files_preserve=[log_fd],
