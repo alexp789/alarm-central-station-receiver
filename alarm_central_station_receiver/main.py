@@ -20,6 +20,7 @@ import logging
 import sys
 import signal
 import socket
+import time
 
 from os import geteuid
 from select import select
@@ -89,6 +90,10 @@ def initialize(config_path):
     create_or_check_required_config(config_path)
     tigerjet.initialize()
     handshake.initialize()
+
+    logging.info("Playing test file to warm up tigerjet")
+    with handshake.Handshake():
+        time.sleep(10)
 
 
 def write_config_exit(config_path):
