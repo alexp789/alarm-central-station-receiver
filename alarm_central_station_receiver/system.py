@@ -19,6 +19,8 @@ import time
 from alarm_central_station_receiver.singleton import Singleton
 from alarm_central_station_receiver.config import AlarmConfig
 from alarm_central_station_receiver.status import AlarmStatus
+from alarm_central_station_receiver.events import create_event
+
 
 try:
     import RPi.GPIO as GPIO
@@ -62,16 +64,18 @@ class AlarmSystem(object):
         GPIO.setup(self.pin, GPIO.OUT)
 
     def __init__(self):
-        self.pin = int(AlarmConfig.get('RpiArmDisarm', 'gpio_pin'))
+        self.alarm = AlarmStatus()
+        self.pin = AlarmConfig.config.getint('RpiArmDisarm',
+                                             'gpio_pin',
+                                             fallback=None)
         if not self.valid_setup():
             return
 
-        self.alarm = AlarmStatus()
         self._initialize_rpi_gpio()
 
     def arm(self, auto_arm):
         if not self.valid_setup():
-            return
+            return None
 
         if self.alarm.arm_status in ['armed', 'arming']:
             status = 'System already %s, ignoring request' % self.alarm.arm_status
@@ -90,7 +94,7 @@ class AlarmSystem(object):
 
     def disarm(self, auto_arm):
         if not self.valid_setup():
-            return
+            return None
 
         if self.alarm.arm_status in ['disarming', 'disarmed']:
             status = 'System already %s, ignoring request' % self.alarm.arm_status
@@ -108,13 +112,34 @@ class AlarmSystem(object):
         self._trip_keyswitch()
 
         # If the system wasn't fully armed, there won't be an event
-        # from the alarm indicating arm/disrm
-        self.alarm.auto_arm = False
+        # from the alarm indicating arm/disarm
         if self.alarm.arm_status == 'arming':
             self.alarm.arm_status = 'disarmed'
+            self.alarm.auto_arm = False
         else:
             self.alarm.arm_status = 'disarming'
+            self.alarm.auto_arm = auto_arm
 
         self.alarm.save_data()
 
         return status
+
+    def abort_arm_disarm(self):
+        if self.alarm.arm_status == 'disarming':
+            self.alarm.arm_status = 'armed'
+            description = 'Unable to Disarm System'
+            event_code = '0001'
+        elif self.alarm.arm_status == 'arming':
+            self.alarm.arm_status = 'disarmed'
+            self.alarm.auto_arm = False
+            description = 'Unable to Arm System'
+            event_code = '0002'
+        else:
+            logging.info('System is %s, nothing to abort',
+                         self.alarm.arm_status)
+            return []
+
+        self.alarm.save_data()
+
+        events = [create_event('E', event_code, description, event_code)]
+        return self.alarm.add_new_events(events)

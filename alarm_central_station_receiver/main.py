@@ -75,10 +75,11 @@ def create_or_check_required_config(path):
         AlarmConfig.create(path)
 
     AlarmConfig.load(path)
-    missing_config = AlarmConfig.validate(AlarmConfig.get())
+    missing_config = AlarmConfig.validate()
     if missing_config:
         logging.error(
-            'The following required configuration is missing from %s\n\n', path)
+            'The following required configuration is missing from %s\n\n',
+            path)
         logging.error('\n'.join(missing_config))
         logging.error('\n\nExiting\n\n')
         sys.exit(-1)
@@ -97,23 +98,31 @@ def write_config_exit(config_path):
         AlarmConfig.create(config_path)
     else:
         logging.info(
-            'Configuration at %s already exists, skipping write\n', config_path)
+            'Configuration at %s already exists, skipping write\n',
+            config_path)
 
     sys.exit(0)
 
 
-def notification_test_exit():
-    logging.info('Sending notification.\n')
+def notification_test_exit(config_path):
+    logging.info('Notification test starting...')
+    create_or_check_required_config(config_path)
     notify_test()
-    logging.info('Notification test complete, exiting.\n')
+    logging.info('Notification test complete, exiting.')
     sys.exit(0)
+
+
+def process_alarm_timeout(alarm_system):
+    logging.info('Arm/Disarm request timeout!')
+    notify_events = alarm_system.abort_arm_disarm()
+    notify(notify_events)
 
 
 def process_alarm_event(alarmhid, phone_number, alarm_status):
     raw_events = callup.handle_alarm_calling(alarmhid, phone_number)
     events = decoder.decode(raw_events)
-    alarm_status.add_new_events(events)
-    notify(events)
+    notify_events = alarm_status.add_new_events(events)
+    notify(notify_events)
 
 
 def process_sock_request(sockfd, alarm_system):
@@ -125,10 +134,34 @@ def process_sock_request(sockfd, alarm_system):
         auto_arm = True if 'auto' in command else False
         if command in ['arm', 'auto-arm']:
             status = alarm_system.arm(auto_arm)
-            rsp = {'error': False, 'status': status}
+            rsp = {'error': False, 'response': status}
         elif command in ['disarm', 'auto-disarm']:
             status = alarm_system.disarm(auto_arm)
-            rsp = {'error': False, 'status': status}
+            rsp = {'error': False, 'response': status}
+        elif command in ['status']:
+            rsp = {
+                'error': False,
+                'response': {
+                    'arm_status': alarm_system.alarm.arm_status,
+                    'arm_status_time': alarm_system.alarm.arm_status_time,
+                    'auto_arm': alarm_system.alarm.auto_arm,
+                    'system_status': alarm_system.alarm.system_status
+                }
+            }
+        elif command in ['history']:
+            options = msg.get('options')
+            offset = options.get('offset', 0)
+            limit = options.get('limit', 1) + offset
+
+            if offset < 0:
+                rsp = {'error': 'Offset must be 0 or greater'}
+            elif limit < 1:
+                rsp = {'error': 'Limit must be 1 or greater'}
+            else:
+                rsp = {
+                    'error': False,
+                    'response': alarm_system.alarm.history[::-1][offset:limit]
+                }
         else:
             rsp = {'error': 'Invalid command %s' % command}
 
@@ -139,22 +172,37 @@ def process_sock_request(sockfd, alarm_system):
         logging.error("Timed out receiving data from client")
 
 
+def get_alarm_timeout(alarm_system):
+    return 300 if alarm_system.alarm.arm_status in [
+        'arming', 'disarming'] else None
+
+
 def alarm_main_loop():
-    phone_number = AlarmConfig.get('Main', 'phone_number')
+    phone_number = AlarmConfig.config.get('Main', 'phone_number')
     alarm_status = AlarmStatus()
     alarm_system = AlarmSystem()
 
     with open(tigerjet.hidraw_path(), 'rb') as alarmhid:
         with json_ipc.ServerSock() as sockfd:
             logging.info("Ready, listening for alarms")
+            timeout = get_alarm_timeout(alarm_system)
+            logging.debug('Timeout: %s', timeout)
+
             while True:
                 read = []
-                read, _, _ = select([alarmhid, sockfd], [], [])
+                read, _, _ = select([alarmhid, sockfd], [], [], timeout)
                 if alarmhid in read:
                     process_alarm_event(alarmhid, phone_number, alarm_status)
 
                 if sockfd in read:
                     process_sock_request(sockfd, alarm_system)
+
+                if not read:
+                    # Arm/disarm event from alarm system never came
+                    process_alarm_timeout(alarm_system)
+
+                timeout = get_alarm_timeout(alarm_system)
+                logging.debug('Timeout: %s', timeout)
 
     return 0
 
@@ -195,7 +243,7 @@ def main():
         write_config_exit(args.config_path)
 
     if args.notification_test:
-        notification_test_exit()
+        notification_test_exit(args.config_path)
 
     initialize(args.config_path)
 

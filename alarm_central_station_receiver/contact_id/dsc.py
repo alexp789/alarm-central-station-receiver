@@ -66,7 +66,7 @@ EVENTS = {
     '412000': {'1': ('MA', 'DLS Lead Out')},
     '453000': {'1': ('O', 'Late to Open')},
     '456000': {'1': ('C', 'Partial Arming')},
-    '458000': {'1': ('A', 'Disarm After Alarm')},
+    '458000': {'1': ('E', 'Disarm After Alarm')},
     '459UUU': {'1': ('A', 'Alarm Within 2 min of Arming')},
     '461000': {'1': ('T', 'Keypad Lockout')},
     '570ZZZ': {'1': ('C', 'Zone Bypass')},
@@ -96,14 +96,16 @@ def create_event_description(event_type, event):
         event_type_name = 'S'
         description += ' Status'
     else:
-        event_type_name = event_type
-        description += 'Unknown Event Type'
+        event_type_name = 'U'
+        description += 'Unknown Event Type (%s)' % event_type
 
     return event_type_name, description
 
 
 def get_zone_name(sensor_code):
-    zone_name = AlarmConfig.get('ZoneMapping', sensor_code)
+    zone_name = AlarmConfig.config.get('ZoneMapping',
+                                       sensor_code,
+                                       fallback=None)
     if not zone_name:
         zone_name = 'Zone %s' % sensor_code
 
@@ -125,8 +127,8 @@ def digits_to_alarmreport(code):
     event_code = code[7:10]
     sensor_code = code[12:15]
 
-    event_type_name = event_type
-    description = 'Unknown Event'
+    event_type_name = 'U'
+    description = 'Unknown Event - %s' % code
     extra_desc = ''
 
     event = EVENTS.get(event_code + sensor_code)
@@ -150,4 +152,4 @@ def digits_to_alarmreport(code):
 
         description += extra_desc
 
-    return event_type_name, description
+    return event_type_name, event_code + sensor_code, description
